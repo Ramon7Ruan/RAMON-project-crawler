@@ -40,6 +40,7 @@ acknowledge/                     ← Recall（App）项目
 
 | 维度 | 独立性 |
 |---|---|
+| **仓库** | **独立 Git 仓库**：`Ramon7Ruan/RAMON-project-crawler`（2026-09-28 从 App 仓库拆出）。本目录有自己的 `.git`，与 App 各自提交、互不感知 |
 | 目录 | `爬虫/`，不散落到 App 的 `app/`、`src/`、`tools/` |
 | 依赖 | 自己的依赖清单与虚拟环境，**不进入 App 的 `node_modules`** |
 | 运行 | 不依赖 Node/npm，不依赖 App 已安装 |
@@ -48,3 +49,23 @@ acknowledge/                     ← Recall（App）项目
 | 复用 | `feed.jsonl`（中性产物）可被任意 app 读取；新增 app 只需加一个 `consumers/` |
 
 详见 `PRD.md` §6。
+
+### 在独立仓库里跑测试
+
+```bash
+cd beacon && python -m pytest -q
+```
+
+默认会 **196 通过 / 2 跳过**。跳过的是 `tests/test_consumers.py` 里那两条
+「对真实内容库做往返验证」的断言——它们需要一个**真实内容库**才能跑，
+而本仓库不含 App 的 `content/`（那是 App 的资产）。它们会明确跳过，
+而不是静默通过：跑不了就说跑不了，这是这个项目的一贯做法。
+
+要跑满 198 项，把内容库路径告诉它：
+
+```bash
+RECALL_CONTENT_DIR=/path/to/acknowledge/content python -m pytest -q
+```
+
+> 这两个断言只在**维护本工具本身**时值得跑；日常改指标配置不需要它们。
+
