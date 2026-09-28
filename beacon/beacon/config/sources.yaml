@@ -1,0 +1,51 @@
+# 数据源登记表（PRD §3.3 SR5：未登记的源不得启用）
+#
+# 本文件是"源能怎么抓"的唯一来源。改抓取参数不需要改代码。
+
+defaults:
+  timeout_seconds: 30        # FRED 单次实测 5.7s，必须留足余量
+  min_interval_seconds: 1.0  # 同一域名两次请求的最小间隔（礼貌抓取）
+  max_retries: 3
+  cache_ttl_hours: 12
+
+sources:
+  fred:
+    tier: L2
+    # display_name 是给人看的（会出现在内容与审核文件里），upstream 是给核对用的。
+    # 两者分开，是因为内容里的出处行要读起来像人写的，而 tier/upstream 要严格如实。
+    display_name: 美国财政部（美国国债收益率曲线）
+    upstream: 美国财政部 / 美联储
+    # via_label 是「数据是从哪条渠道取的」，仅在 L2 源上出现。
+    # 与 display_name 分开，是因为两者经常是不同主体：
+    # display_name 说"这是谁的数据"，via_label 说"我们通过谁拿到"。
+    via_label: FRED
+    base_url: https://fred.stlouisfed.org
+    # ⚠️ 必须用 curl 后端：实测 httpx 对该域 0/3 成功（全部读超时），
+    # curl 3/3 成功（87B / 3-6s）。这是确定性的客户端差异，不是网络波动。
+    # 详见 core/curl_transport.py 与 ../docs/数据源清单.md §2.1。
+    transport: curl
+    timeout_seconds: 40
+    headers:
+      # 空值 = 不发送该 header（见 core/curl_transport.py）。
+      # 实测：带浏览器 UA 时该域立刻失败（HTTP/2 stream INTERNAL_ERROR 或读超时），
+      # 不带 UA 用 curl 默认值时 3/3 稳定成功（2.4-5.7s）。所以这里刻意留空。
+      User-Agent: ""
+      Accept: ""
+
+  eastmoney:
+    tier: L2
+    display_name: 国家统计局与中国物流与采购联合会
+    upstream: 国家统计局 / 中国物流与采购联合会
+    via_label: 东方财富
+    base_url: https://datacenter-web.eastmoney.com
+    headers:
+      User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128.0 Safari/537.36
+      Referer: https://data.eastmoney.com/     # 缺此头可能被拒（实测）
+
+  csindex:
+    tier: L1
+    display_name: 中证指数有限公司
+    upstream: 中证指数有限公司（指数编制机构，一手）
+    base_url: https://www.csindex.com.cn
+    headers:
+      User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128.0 Safari/537.36

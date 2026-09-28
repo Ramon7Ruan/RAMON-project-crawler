@@ -1,0 +1,250 @@
+# 指标 → 概念 → 字段 三元组（PRD §4.7 F6）
+#
+# **不在本表内的观测，即使数据完全正确也一律丢弃。**
+# 这张表同时是一份安全清单：它让「工具能改哪些内容」成为可审计的显式枚举，
+# 而不是"代码里写了什么就能改什么"。
+#
+# 本文件是「工具能怎么改内容」的唯一来源。改这里不需要改代码。
+
+version: 1
+
+
+# --------------------------------------------------------------------------- #
+# 溯源文字的模板
+# --------------------------------------------------------------------------- #
+# 「溯源文字」与「解读文字」的区别、以及为什么前者可以机械生成，见
+# docs/漏斗与分级设计.md §2。
+#
+# 硬要求：**模板只能由一组固定的占位符拼出来**，不允许自由生成。
+# 这样"工具改了什么文字"永远等于"模板渲染的结果"，可预测、可 diff、可回溯。
+#
+# 占位符：
+#   {authority}     数据的权威来源（L2 源取 upstream，L1 源取机构名）
+#   {via_note}      经手渠道说明，形如「（数据经东方财富获取）」；L1 源为空串
+#   {tier}          L1 / L2
+#   {as_of}         「内容截至」日期（YYYY-MM-DD）
+#   {latest_period} 数据最新期间
+#   {series_label}  整个块在图上的语义（如「制造业 / 非制造业 PMI」）
+#
+# 「权威来源 + 经手渠道」这个结构是刻意的：内容里那行出处是给人读的，
+# 写中间商名字（eastmoney / FRED）既不好读、也不如实；
+# 而只写权威来源又会掩盖数据是从哪里取的。两者都要有。
+#
+# 三个模板的名字是**中性的**（revision_date / item_source / block_source），
+# 而它们各自写到哪个字段，由每个指标自己的 text_targets 声明。
+# 这一点是刻意的：core 里不该出现 "source"、"updated_at" 这类某一个 app 的字段名——
+# 实测证明过它会发生（接了第二个消费者立刻暴露），所以现在由配置来说。
+templates:
+  revision_date: "{as_of}"
+  item_source: "{authority}{via_note}，截至 {as_of}"
+  block_source: "{series_label}；数据来源：{authority}，截至 {as_of}"
+
+
+# --------------------------------------------------------------------------- #
+# 派生算子注册表
+# --------------------------------------------------------------------------- #
+# 「派生可复现」（PRD §4.5 F4）的前提是公式**登记在案**。
+# 漏斗里不允许内联公式——否则复现性就没有机制保障，只剩口头承诺。
+operators:
+  percentile-rank:
+    kind: rank-share
+    description: >-
+      当前值在给定区间内的秩占比（%）。分子是区间内不大于当前值的观测数，
+      分母是区间内总观测数。区间由参数给出，因为「分位依赖区间，区间一换结论就变」。
+    params:
+      windows:
+        type: list
+        required: true
+        description: 区间列表，每项 {label, days}；days 为空表示"全部历史"
+
+  spread:
+    kind: difference
+    description: 长端 − 短端。用两条独立序列相减，并与候选里的值逐点比对。
+    params:
+      minus:
+        type: indicator
+        required: true
+        description: 被减数对应的指标 id
+
+
+# --------------------------------------------------------------------------- #
+# 指标映射
+# --------------------------------------------------------------------------- #
+# 每个条目回答四个问题：
+#   1. 这个指标写到**哪个概念**的**哪个字段**（三元组）
+#   2. 那个字段当前**承载什么语义**（slot：名字与单位）
+#   3. 允许工具改动的字段有哪些（writable_fields —— 白名单，见 docs/漏斗与分级设计.md §2.2）
+#   4. 本指标声明用哪些交叉校验手段（checks —— 声明了就必须能执行，跑不动就降黄）
+indicators:
+
+  # ------------------------------------------------------------------------- #
+  # 估值分位 ← 中证指数 的 PE 序列
+  # 这是首版唯一一个「槽位语义天然匹配」的映射：
+  # 概念里的 dataviz 画的就是「同一指数在不同回溯区间下的分位」，
+  # 而我们的指标正好能算出这四个区间的分位值。
+  # ------------------------------------------------------------------------- #
+  cn.index.pe.000300:
+    target: hotspot.data.valuation-percentile
+    role: content
+    slot:
+      path: blocks[1].series[0].points
+      # 槽位当前承载的语义。与现状不符 → 结构性变更 → 红级（见 leveling.py）
+      series_name: 分位
+      # series_label 会出现在块级溯源文字里。**必须声明**，
+      # 否则模板会退回用目标 id 兜底，把内部标识符泄漏进内容。
+      series_label: 沪深300 估值分位
+    expected_caliber: level
+    transform:
+      operator: percentile-rank
+      params:
+        windows:
+          - {label: 近 3 年, days: 1095}
+          - {label: 近 5 年, days: 1825}
+          - {label: 近 10 年, days: 3650}
+          - {label: 全历史, days: null}
+    checks: [C3]
+    # 模板 → 写到哪个字段。block_source 不用写：它固定落在"槽位所在的那个块"的 source 上。
+    text_targets:
+      revision_date: updated_at
+      item_source: source
+    writable_fields:
+      - blocks[1].series[0].points
+      - blocks[1].xTicks
+      - blocks[1].source        # 溯源文字：由模板从观测生成，非解读
+      - source                  # 溯源文字：概念级「截至日期」
+      - updated_at
+
+  # ------------------------------------------------------------------------- #
+  # PMI 怎么读 ← 东方财富 的制造业 / 非制造业 PMI
+  # ⚠️ 槽位语义不匹配：概念里那个 dataviz 画的是「新订单与产成品库存」两个**分项**，
+  #    而我们的数据是**综合指数**。名不同、含义不同。
+  #    → 首次运行必为红级（结构性变更），工具只给出建议与现状对照。
+  #    人在 App 里把槽位改成「制造业 / 非制造业」之后，后续刷新才转为机械。
+  # ------------------------------------------------------------------------- #
+  cn.pmi.manufacturing:
+    target: hotspot.data.pmi-reading
+    role: content
+    slot:
+      path: blocks[2].series[0].points
+      series_name: 制造业 PMI
+      series_label: 制造业 / 非制造业 PMI
+      xTicks: ["2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"]
+    expected_caliber: level
+    transform:
+      operator: null
+      params:
+        periods: 6           # 近 6 个月（= F2 的重拉窗口，按期间计）
+    checks: [C2]
+    checks_extra:
+      c2:
+        kind: caliber-identity
+        # 恒等式（实测 212/212 零偏差）：
+        #   同比百分比 == (本期水平 − 去年同期水平) / 去年同期水平 × 100
+        # 同比来自**同一次响应**（eastmoney 的 MAKE_SAME 字段），
+        # 所以这是「同源多口径互校」——它能抓住源自身前后矛盾
+        # （例如回改了历史水平值却漏改同比字段），而单口径检查看不出来。
+        other_caliber: yoy
+        tolerance_key: percent
+    text_targets:
+      revision_date: updated_at
+      item_source: source
+    writable_fields:
+      - blocks[2].series[0].points
+      - blocks[2].series[0].name
+      - blocks[2].xTicks
+      - blocks[2].source
+      - source
+      - updated_at
+
+  cn.pmi.non-manufacturing:
+    target: hotspot.data.pmi-reading
+    role: content
+    slot:
+      path: blocks[2].series[1].points
+      series_name: 非制造业 PMI
+      series_label: 制造业 / 非制造业 PMI
+    expected_caliber: level
+    transform:
+      operator: null
+      params:
+        periods: 6
+    checks: [C2]
+    checks_extra:
+      c2:
+        kind: caliber-identity
+        other_caliber: yoy
+        tolerance_key: percent
+    text_targets:
+      revision_date: updated_at
+      item_source: source
+    writable_fields:
+      - blocks[2].series[1].points
+      - blocks[2].series[1].name
+      - blocks[2].xTicks
+      - blocks[2].source
+      - source
+      - updated_at
+
+
+  # ------------------------------------------------------------------------- #
+  # 收益率曲线 ← FRED
+  # 画的是「10 年期减 2 年期的利差」，**不是两条期限线**。
+  # 理由是可复核性：利差能由已注册的 spread 算子重算一遍（C3），
+  # 而两条原始期限线没有任何可复核的派生量——那会让这个指标**永久停在黄级**
+  # （PRD §4.6：无可用校验手段就是黄级，不是绿级）。
+  # 图上跌破 0 就是倒挂，这是这个量最直观的呈现方式。
+  # ------------------------------------------------------------------------- #
+  us.treasury.dgs10:
+    target: hotspot.data.yield-curve-inversion
+    role: content
+    slot:
+      path: blocks[1].series[0].points
+      series_name: 利差
+      series_label: 10 年期减 2 年期利差
+    expected_caliber: level
+    transform:
+      operator: spread
+      params:
+        minus: us.treasury.dgs2     # 被减数；它只作为算子输入，不写进内容
+        periods: 12
+    checks: [C3]
+    text_targets:
+      revision_date: updated_at
+      item_source: source
+    writable_fields:
+      - blocks[1].series[0].points
+      - blocks[1].series[0].name
+      - blocks[1].xTicks
+      - blocks[1].source
+      - source
+      - updated_at
+
+  # ------------------------------------------------------------------------- #
+  # 曾经的说明（保留作为记录）：
+  # ⚠️ 本版一度**不声明映射**，原因是实测出来的，不是遗漏：
+  #    概念里那个 dataviz 是柱状图「倒挂深度 vs 后续衰退概率」——一个**说明性**图示，
+  #    不是数据槽。它没有容纳「10Y/2Y 利差时间序列」的位置。
+  #    强行把序列塞进这个槽位，会把图的含义改掉（x 轴从"倒挂深度"变成日期），
+  #    这不是数值刷新，是**改写内容**。
+  #    → 需要人先在概念里新增一个 dataviz（line，利差序列）块，之后才谈得上机械刷新。
+  #    在此之前，声明它等于让 F6 报"映射到不存在的字段路径"——那才是更坏的行为：
+  #    配置错误被伪装成一次正常运行。
+  # ------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# 只用于校验的指标（role: check-only）
+# --------------------------------------------------------------------------- #
+# 它们**不进内容**，存在的唯一目的是给 C2 提供第二个口径。
+# 之所以要显式登记而不是让适配器偷偷多返几条：
+# 「工具会用哪些数据、用到哪去」必须是一份可审计的清单。
+check_only_indicators:
+  cn.pmi.manufacturing.yoy:
+    target: hotspot.data.pmi-reading
+    role: check-only
+    for_indicator: cn.pmi.manufacturing
+    note: 制造业 PMI 的同比百分比（东方财富 MAKE_SAME 字段），用于 C2 口径互校
+  cn.pmi.non-manufacturing.yoy:
+    target: hotspot.data.pmi-reading
+    role: check-only
+    for_indicator: cn.pmi.non-manufacturing
+    note: 非制造业 PMI 的同比百分比（东方财富 NMAKE_SAME 字段），用于 C2 口径互校

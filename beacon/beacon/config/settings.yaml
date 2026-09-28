@@ -1,0 +1,26 @@
+# 运行设置（CORE-4）
+version: 1
+
+funnel:
+  # F2 重拉窗口：每次运行重拉最近 N 期，而不是只取最新一期。
+  # 理由：官方数据会回改历史值（GDP 两次修订、就业数据回改前两月）。
+  # 只追加新数据会让库里长期留着已被官方修正的旧值。
+  #
+  # ⚠️ N 按**期间**计，不按自然时间。月度数据 → 最近 N 个月。
+  # 不接受 N=1（PRD §4.3 明确"强制，不可配置为 1"）。
+  relookback_periods: 6
+
+  # 序列降采样：日度序列按期取最后一个观测，再按上限抽稀。
+  # max_points 的由来见 docs/漏斗与分级设计.md §1。
+  series:
+    sample: last-in-period
+    max_points: 60
+    keep_latest: true        # 抽稀时必须保留最新一点（否则"最新"就丢了）
+
+candidates:
+  # 产物根目录。留空 = ./content-candidates（相对于工作目录，不硬编码父项目路径）
+  out_dir: null
+
+flags:
+  # App 导出的「待修正」清单。缺失不算错（见 docs/漏斗与分级设计.md §6）。
+  path: null                 # null = ./flags.json

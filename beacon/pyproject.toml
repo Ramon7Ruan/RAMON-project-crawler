@@ -1,0 +1,17 @@
+[project]
+name = "beacon"
+version = "0.1.0"
+description = "Recall 内容采集工具：把官方公开数据变成可审核的候选变更"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27", "pydantic>=2.6", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+# 临时目录固定到项目内：系统临时目录在部分受限环境下不可写，
+# 而测试需要稳定的可写 basetemp。该目录已在 .gitignore 中排除。
+addopts = "--basetemp=.pytest-tmp"
